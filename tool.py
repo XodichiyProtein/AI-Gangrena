@@ -15,16 +15,15 @@ import base64
 import io
 import os
 import torch
-from pytesseract import pytesseract
-from transformers import AutoTokenizer, AutoModelForCausalLM
+import re
 
-searchD = DuckDuckGoSearchRun()
+
 os.environ['TF_ENABLE_ONEDNN_OPTS'] = '0'
 
 
 class Code:
-    def __init__(self, code_llm='qwen2.5-coder:7b-instruct'):
-        self.code_llm = Ollama(model=code_llm)
+    def __init__(self, code_llm='coder'):
+        self.code_llm = Ollama(model=code_llm, num_gpu=63)# Указываем слои для GPU)
 
     def ask_code(self, prompt) -> str:
         # question: str, file_context: str, search: str, file_text : str
@@ -41,23 +40,28 @@ class Code:
             return "Error: Input must be a dictionary with 'question', 'file_context', 'file_text' keys."
 
         question : str= prompt["question"]
-        file_context : list = prompt["file_context"]
+        file_context : str = prompt["file_context"]
         file_text : str= prompt["file_text"]
 
+        cleaned = file_context.strip("[]").replace("'", "").replace('"', '')
+        file_context = [file.strip() for file in cleaned.split(",")]
+
+
         f = CurrencyConverter()
-        file_ctx = []
+        file_ctx = ''
         if file_context != None:
             for file in file_context:
-                file_ctx.append(f.load_file(file))
+                file_ctx += ('Название файла '+str(file) + ' : ' + ' Информация из файла '+str(f.load_file(file)))
         else:
             file_ctx = ''
+        print("-"*50)
         conversation = ConversationChain(llm=self.code_llm)
         full_input = f"""
         ### Инструкции:
         Ты должен создать код по запросу пользователя. Выдавай код и дополнение к нему
         
         ### Контекст:
-        - Данные из файлов: {file_ctx}
+        - Код из файлов: {file_ctx}
         - {file_text}
 
         ### Запрос пользователя:
@@ -65,6 +69,7 @@ class Code:
 
         ### Ответ:
         """
+        print(full_input)
         response = conversation.predict(input=full_input)
         return ('готовый код:' + response)
 
@@ -214,6 +219,6 @@ class Enternet:
 
 
 if __name__ == '__main__':
-    bot = AnalysisPhoto()
-    print(bot.ask_llava(
-        {'image_path': r"C:\Users\kules\Downloads\photo_2025-05-12_22-24-43.jpg", 'question': 'Who on the photo?'}))
+    bot = Code()
+    print(bot.ask_code(
+        {"question": "Что можно улучшить в коде из файлов? Выдай готовый код", "file_context":"['Z:\\PyChatmProject\\langchain\\v2\\tool.py', 'Z:\\PyChatmProject\\langchain\\v2\\main.py']", "file_text":""}))

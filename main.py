@@ -180,14 +180,15 @@ class AI_Bot_v2:
                 - Do not repeat actions unnecessarily. Stop after finding a relevant answer or if no tool is applicable.
                 - If a tool returns an error or unclear result, report it and proceed to a final answer.
                 - Avoid looping: you have a maximum of 2 tool calls before providing a final answer.
-
-                """+f"""### User Wishes:
+                - In the final answer, use all the information to make the answer complete, use answers from the tools
+                
+                """ + f"""### User Wishes:
                 Mandatory wishes: {self._load_admin_wishes()}
                 User wishes: {self._load_wish(UserID)}
                 Available files: {file_path}
 
                 ### Dialogue History:
-                {self._load_storage(ChatID, UserID).load_memory_variables({})["history"]}"""+"""
+                {self._load_storage(ChatID, UserID).load_memory_variables({})["history"]}""" + """
 
                 ### Answer Format:
                 Question: {input}
@@ -251,7 +252,7 @@ class AI_Bot_v2:
 
 if __name__ == '__main__':
     bot = AI_Bot_v2()
-    print(bot._load_storage(ChatID='6', UserID='0').load_memory_variables({})["history"])
+    print(bot._load_storage(ChatID='9', UserID='0').load_memory_variables({})["history"])
     # print(bot.ask(ChatID='4', prompt='Что на этих фото', file_path=[r'Z:\Screenshots\бебра.png', r'Z:\Screenshots\Снимок экрана 2025-04-21 223750.png']))
-    print(bot.ask(ChatID='6', prompt='Что можно улучшить в коде из файлов? Выдай готовый код',
+    print(bot.ask(ChatID='9', prompt='Что можно улучшить в коде из файлов? Выдай готовый код',
                   file_path=[r'Z:\PyChatmProject\langchain\v2\tool.py', r'Z:\PyChatmProject\langchain\v2\main.py']))
