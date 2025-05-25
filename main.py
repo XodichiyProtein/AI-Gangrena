@@ -15,6 +15,7 @@ from langchain_ollama import OllamaLLM
 from tool import *
 
 
+
 class AI_Bot_v2:
     def __init__(self):
         self.base_path = Path('.')
@@ -30,7 +31,7 @@ class AI_Bot_v2:
 
         self.search_tool = Tool(
             name="Поиск Google",
-            func=Enternet.google_search,
+            func=InternetSearch.google_search,
             description="""Поиск Google. Используй для получения актуальной информации из интернета.
                 Формат: укажите вопрос или ключевое слово для поиска.
                 Пример: 'Мультфильмы Disney'"""
@@ -159,8 +160,11 @@ class AI_Bot_v2:
         user_prompt = {'output': f'Вопрос: {prompt}, Используемые файлы: {str(file_path)}'}
         result = {'output': ''}
         try:
-            self._load_wish(UserID)
-            # Инициализация модели и агента
+            # Load user and admin wishes
+            user_wishes = self._load_wish(UserID)
+            admin_wishes = self._load_admin_wishes()
+
+            # Initialize model
             model = OllamaLLM(
                 model='gemma3:12b',
                 temperature=0.1,
@@ -168,81 +172,90 @@ class AI_Bot_v2:
                 frequency_penalty=0.3,
                 timeout=60
             )
+
+            # Define tools
             tools = [self.converter_tool, self.CodeGen, self.PhotoGen, self.AnalPhoto, self.search_tool]
+
+            # Define the ReAct prompt template
             react_prompt = PromptTemplate.from_template(
                 """You are an intelligent AI assistant with access to the following tools:
 
                 {tools}
 
                 ### Instructions:
-                - Analyze the user's question and select the most appropriate tool to answer it.
-                - If no tool is needed, provide the answer directly.
+                - Analyze the user's question and select the most appropriate tool from [{tool_names}].
+                - If no tool is needed, provide the answer directly with Action: None.
                 - Do not repeat actions unnecessarily. Stop after finding a relevant answer or if no tool is applicable.
-                - If a tool returns an error or unclear result, report it and proceed to a final answer.
+                - If a tool returns an error, report it in the Observation and proceed to a final answer.
                 - Avoid looping: you have a maximum of 2 tool calls before providing a final answer.
-                - In the final answer, use all the information to make the answer complete, use answers from the tools
-                
-                """ + f"""### User Wishes:
-                Mandatory wishes: {self._load_admin_wishes()}
-                User wishes: {self._load_wish(UserID)}
+                - For the "Работа с кодом" tool, ensure the input is a JSON string with keys: "question", "file_context" (list of file paths), and "file_text" (string).
+                - Strictly follow the format below for your response.
+
+                ### User Wishes:
+                Mandatory wishes: {admin_wishes}
+                User wishes: {user_wishes}
                 Available files: {file_path}
 
                 ### Dialogue History:
-                {self._load_storage(ChatID, UserID).load_memory_variables({})["history"]}""" + """
+                {history}
 
                 ### Answer Format:
-                Question: {input}
-                Thought: Reason about which tool to use or if a direct answer is possible
-                Action: Selected tool (one of [{tool_names}]) or "None" if no tool is needed
-                Action Input: Input data for the tool (if applicable)
-                Observation: Result of tool execution (if applicable)
-                Thought: I have a final answer
-                Final Answer: Final response to the user
+                Thought: [Reason about which tool to use or if a direct answer is possible]
+                Action: [One of {tool_names} or "None"]
+                Action Input: [Input data for the tool, if applicable]
+                Observation: [Result of tool execution, if applicable]
+                Thought: [Reasoning after observing tool result or deciding on final answer]
+                Final Answer: [Final response to the user]
 
                 ### Let's get started!
                 Question: {input}
-                Thought: {agent_scratchpad}"""
+                Thought: {agent_scratchpad}
+                """
             )
+
+            # Create agent
             agent = create_react_agent(
                 model,
                 tools,
                 react_prompt
             )
-            full_input = f"""
-                    ### Инструкции:
-                    Обязательные пожелания для работы: {self._load_admin_wishes()}
-                    Пожелания пользователя для работы: {self._load_wish(UserID)}
-                    Доступные файлы: {file_path}
-                    
-                    ### История:
-                    История диалога с пользователем: {self._load_storage(ChatID, UserID).load_memory_variables({})}                    
-                    ### Запрос пользователя:
-                    {prompt}
 
-                    ### Ответ:
-                    """
+            # Load conversation history
+            history = self._load_storage(ChatID, UserID).load_memory_variables({})["history"]
 
+            # Create agent executor
             agent_executor = AgentExecutor(
                 agent=agent,
                 tools=tools,
                 verbose=True,
-                handle_parsing_errors=True,
+                handle_parsing_errors=True,  # Fixed typo: Fasle -> True
                 max_iterations=5,
-                early_stopping_method="generate",
-                return_intermediate_steps=True,
                 max_execution_time=300,
                 tool_exception_handler=lambda e: f"Ошибка инструмента: {str(e)}"
             )
-            # Пример использования
-            result = agent_executor.invoke({
-                "input": full_input
+
+            # Construct input for the CodeGen tool if needed
+            code_gen_input = json.dumps({
+                "question": prompt,
+                "file_context": file_path,
+                "file_text": ""
             })
-            user_prompt = f'Вопрос: {prompt}, Используемые файлы: {str(file_path)}'
+
+            # Execute the agent
+            result = agent_executor.invoke({
+                "input": prompt,
+                "file_path": file_path,
+                "admin_wishes": admin_wishes,
+                "user_wishes": user_wishes,
+                "history": history,
+                "agent_scratchpad": f"Thought: The user asked to improve code in files. I will use the 'Работа с кодом' tool with the provided file paths.\nAction: Работа с кодом\nAction Input: {code_gen_input}"
+            })
 
         except Exception as e:
             return str(e)
 
-        self._save_storage(UserID=UserID, ChatID=ChatID, Human_Message=user_prompt, AI_Message=result['output'])
+        self._save_storage(UserID=UserID, ChatID=ChatID, Human_Message=user_prompt['output'],
+                           AI_Message=result['output'])
         return result['output']
 
 
@@ -251,6 +264,7 @@ class AI_Bot_v2:
 Важный текст для релиза!'''
 
 if __name__ == '__main__':
+    os.environ['TF_ENABLE_ONEDNN_OPTS'] = '0'
     bot = AI_Bot_v2()
     print(bot._load_storage(ChatID='9', UserID='0').load_memory_variables({})["history"])
     # print(bot.ask(ChatID='4', prompt='Что на этих фото', file_path=[r'Z:\Screenshots\бебра.png', r'Z:\Screenshots\Снимок экрана 2025-04-21 223750.png']))
