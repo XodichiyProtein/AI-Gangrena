@@ -75,7 +75,6 @@ class AI_Bot_v2:
         chat_memory.add_user_message(f"[{timestamp}] {Human_Message}")
         if AI_Message:
             chat_memory.add_ai_message(f"[{timestamp}] {AI_Message}")
-        print("Save")
 
     # Wish User and Admin---------------------------------------------------------------------------------------------->
     def _ensure_user_wish_file(self, user_id: str) -> Path:
@@ -261,6 +260,11 @@ class AI_Bot_v2:
 
 '''Да она меня тупо в игнор кинула, 1 раз на улице встретились да и всё. По итогу 2 дня подряд меж ляшек у неё повалялся
 И всё
+
+Я опять кадрю альтуху которую уже код-рил(ил)
+
+Да нихуя, она к другу бывшего ушла. Я у неё позавчера был дома, и была одета как шлюха
+
 Важный текст для релиза!'''
 
 if __name__ == '__main__':

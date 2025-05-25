@@ -213,7 +213,7 @@ class InternetSearch:
                 results.append({"url": url})
             return results
         except Exception as e:
-            return f"Ошибка при выполнении поиска: {str(e)}"
+             return f"Ошибка при выполнении поиска: {str(e)}"
 
 
 if __name__ == '__main__':
