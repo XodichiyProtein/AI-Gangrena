@@ -1,65 +1,28 @@
-import json
-import os
+import gc
 from datetime import datetime
 from pathlib import Path
-from typing import List
+from typing import List, Dict
 
 from langchain.agents import create_react_agent, AgentExecutor
-from langchain_core.messages import AIMessage, HumanMessage
-from langchain_core.prompts import PromptTemplate
 from langchain.memory import ConversationBufferMemory
 from langchain_community.chat_message_histories import FileChatMessageHistory
-from langchain_core.tools import Tool
+from langchain_core.prompts import PromptTemplate
+
+from TechTool import ImageAnalysisInput, AnalysisPhoto
+from Tools import AITools
+
+import os
+import json
+
 from langchain_ollama import OllamaLLM
-
-from tool import *
-
 
 
 class AI_Bot_v2:
     def __init__(self):
         self.base_path = Path('.')
         self.global_wish_path = 'admin_wish.json'
-
-        self.converter_tool = Tool(
-            name="Анализ файла",
-            func=CurrencyConverter().load_file,
-            description='''Читает файл и возвращает текст из него.
-                         Формат: просто укажите полный путь к файлу
-                         Пример: "C:/Users/kules/Downloads/AyuGram Desktop/8.DOCX"'''
-        )
-
-        self.search_tool = Tool(
-            name="Поиск Google",
-            func=InternetSearch.google_search,
-            description="""Поиск Google. Используй для получения актуальной информации из интернета.
-                Формат: укажите вопрос или ключевое слово для поиска.
-                Пример: 'Мультфильмы Disney'"""
-        )
-
-        self.AnalPhoto = Tool(
-            name="Анализировать фото",
-            func=AnalysisPhoto().ask_llava,
-            description=(
-                '''Анализирует фото. Задавать вопросы на англисском языке. Требует строгий JSON-формат:
-                "{"image_path": "полный_путь.jpg", "question": "ваш_вопрос"}"
-                Пример:
-                "{"image_path": "C:/Users/kules/photo.jpg", "question": "Что на фото?"}"'''
-            )
-        )
-
-        self.CodeGen = Tool(
-            name='Работа с кодом',
-            func=Code().ask_code,
-            description='''Нейронная сеть которая работает с кодом, может редактировать, создавать, исправлять.
-            Формат ввода строгий json: "{"question": "Вопрос пользователя", "file_context":"список файлов через запятую", "file_text":"данные из файлов" "
-            Пример: {"question": "Вопрос пользователя", "file_context":"['C:\\Users\\kules\\Downloads\\AyuGram Desktop\\20230620_194957.jpg']", "file_text":"данные из файлов" " '''
-        )
-        self.PhotoGen = Tool(
-            name='ГЕНИРАЦИЯ ФОТО',
-            func=GenerationPhoto().gen_img,
-            description='''Создаёт изображение по тексту. Используйте в запросе английский язык для более качественного ответа. Если пользователь просит сделать изображение то использовать этот интсрумент. Формат: 'вопрос пользователя' '''
-        )
+        self.tools = AITools().get_all_tools()
+        self.tools_name = AITools().get_all_tools_name()
 
     # Storage---------------------------------------------------------------------------------------------------------->
 
@@ -165,49 +128,46 @@ class AI_Bot_v2:
 
             # Initialize model
             model = OllamaLLM(
-                model='gemma3:12b',
+                model='mixtral:8x7b',
                 temperature=0.1,
+                tfs_z=0.95,  # Tail free sampling
+                typical_p=0.95,  # Typical sampling
+                repeat_penalty=1.1,  # Penalty за повторения
                 top_p=0.7,
                 frequency_penalty=0.3,
-                timeout=60
+                timeout=60,
+                gpu_layers=40  # Количество слоёв для выгрузки на GPU (максимально возможное)
             )
 
-            # Define tools
-            tools = [self.converter_tool, self.CodeGen, self.PhotoGen, self.AnalPhoto, self.search_tool]
-
-            # Define the ReAct prompt template
+            history = self._load_storage(ChatID, UserID)
             react_prompt = PromptTemplate.from_template(
-                """You are an intelligent AI assistant with access to the following tools:
-
+                """You are an AI assistant who processes requests: from writing code to finding information. Available tools:
+    
                 {tools}
-
+    
                 ### Instructions:
-                - Analyze the user's question and select the most appropriate tool from [{tool_names}].
-                - If no tool is needed, provide the answer directly with Action: None.
-                - Do not repeat actions unnecessarily. Stop after finding a relevant answer or if no tool is applicable.
-                - If a tool returns an error, report it in the Observation and proceed to a final answer.
-                - Avoid looping: you have a maximum of 2 tool calls before providing a final answer.
-                - For the "Работа с кодом" tool, ensure the input is a JSON string with keys: "question", "file_context" (list of file paths), and "file_text" (string).
-                - Strictly follow the format below for your response.
-
-                ### User Wishes:
-                Mandatory wishes: {admin_wishes}
-                User wishes: {user_wishes}
-                Available files: {file_path}
-
-                ### Dialogue History:
-                {history}
-
-                ### Answer Format:
-                Thought: [Reason about which tool to use or if a direct answer is possible]
+                - Read the request and decide if a tool is needed or if you can respond directly.
+                - For code, use 'Work with code'. For photos, use 'Analyze photos' or 'Generate photos'.
+                - If the request is simple or does not require tools, specify Action: None and give an answer.
+                - If the tool returned an error or the result is sufficient, finish with Final Answer. Do not repeat actions unless necessary.
+                - Maximum 1 tool call for simple requests to avoid loops.
+                - Consider chat history, admin and user wishes, files if specified.
+                - Always respond in the format: Thought, Action, Action Input, Observation, Final Answer.
+                """ + f"""
+                ### Context:
+                Admin Wishes: {admin_wishes}
+                User Wishes: {user_wishes}
+                Available Files: {file_path}
+                """ + """
+                ### Response Format:
+                Thought: [Request Analysis and Action Selection]
                 Action: [One of {tool_names} or "None"]
-                Action Input: [Input data for the tool, if applicable]
-                Observation: [Result of tool execution, if applicable]
-                Thought: [Reasoning after observing tool result or deciding on final answer]
-                Final Answer: [Final response to the user]
-
-                ### Let's get started!
-                Question: {input}
+                Action Input: [Tool Data or Empty]
+                Observation: [Tool Result or Empty]
+                Final Answer: [User Response]
+    
+                """ + """### Query:
+                {input}
                 Thought: {agent_scratchpad}
                 """
             )
@@ -215,46 +175,34 @@ class AI_Bot_v2:
             # Create agent
             agent = create_react_agent(
                 model,
-                tools,
+                self.tools,
                 react_prompt
             )
-
-            # Load conversation history
-            history = self._load_storage(ChatID, UserID).load_memory_variables({})["history"]
 
             # Create agent executor
             agent_executor = AgentExecutor(
                 agent=agent,
-                tools=tools,
+                memory=history,
+                tools=self.tools,
                 verbose=True,
                 handle_parsing_errors=True,  # Fixed typo: Fasle -> True
-                max_iterations=5,
+                max_iterations=10,
                 max_execution_time=300,
                 tool_exception_handler=lambda e: f"Ошибка инструмента: {str(e)}"
             )
 
-            # Construct input for the CodeGen tool if needed
-            code_gen_input = json.dumps({
-                "question": prompt,
-                "file_context": file_path,
-                "file_text": ""
+            # Выполняем запрос агента
+            result = agent_executor.invoke({
+                "input": prompt
             })
 
-            # Execute the agent
-            result = agent_executor.invoke({
-                "input": prompt,
-                "file_path": file_path,
-                "admin_wishes": admin_wishes,
-                "user_wishes": user_wishes,
-                "history": history,
-                "agent_scratchpad": f"Thought: The user asked to improve code in files. I will use the 'Работа с кодом' tool with the provided file paths.\nAction: Работа с кодом\nAction Input: {code_gen_input}"
-            })
 
         except Exception as e:
-            return str(e)
+            print(str(e))
 
         self._save_storage(UserID=UserID, ChatID=ChatID, Human_Message=user_prompt['output'],
                            AI_Message=result['output'])
+        del model
         return result['output']
 
 
@@ -265,12 +213,14 @@ class AI_Bot_v2:
 
 Да нихуя, она к другу бывшего ушла. Я у неё позавчера был дома, и была одета как шлюха
 
+Да я пока этот код писал успел сменить 2 альтухи! 01.06.2025
+
 Важный текст для релиза!'''
 
 if __name__ == '__main__':
-    os.environ['TF_ENABLE_ONEDNN_OPTS'] = '0'
     bot = AI_Bot_v2()
-    print(bot._load_storage(ChatID='9', UserID='0').load_memory_variables({})["history"])
-    # print(bot.ask(ChatID='4', prompt='Что на этих фото', file_path=[r'Z:\Screenshots\бебра.png', r'Z:\Screenshots\Снимок экрана 2025-04-21 223750.png']))
-    print(bot.ask(ChatID='9', prompt='Что можно улучшить в коде из файлов? Выдай готовый код',
-                  file_path=[r'Z:\PyChatmProject\langchain\v2\tool.py', r'Z:\PyChatmProject\langchain\v2\main.py']))
+    result = bot.ask(
+        ChatID='10',
+        prompt='"Z:/PyChatmProject/langchain/v2/hui.txt" что на этом файле?',
+    )
+    print(result)
